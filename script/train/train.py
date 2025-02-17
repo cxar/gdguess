@@ -18,19 +18,19 @@ from transformers import (
 # --- configuration ---
 input_dir = "../../data/audsnippets-all"  # directory structure: year/date (e.g., "1969", then files)
 target_sr = 24000  # already at target sample rate; no resampling
-batch_size = 32
+batch_size = 16
 initial_lr = 1e-4
-num_workers = 2
-valid_split = 0.1
+num_workers = 0  # adjust as needed
+valid_split = 0.1  # fraction of dataset for full validation (used at epoch end)
 base_year = 1968
 base_date = datetime.date(
     base_year, 1, 1
 )  # for converting dates to regression target (days since)
 resume_checkpoint = "checkpoint_latest.pt"  # checkpoint file for resume (if exists)
-checkpoint_freq = 1000  # save checkpoint & validate every 1000 steps
+checkpoint_freq = 1000  # checkpoint & mini-validate every this many training steps
 
-# for an indefinite training loop, we set the total training steps in the scheduler to a HUGE number
-scheduler_total_steps = 10**9
+total_training_steps = 1000000  # total steps for lr scheduler
+num_warmup_steps = 500
 
 
 # --- dataset definition ---
@@ -47,7 +47,7 @@ class snippetdataset(Dataset):
                 for file in os.listdir(subdir_path):
                     if file.startswith(f"{subdir}-00-00"):
                         continue
-                    # use the first 10 chars (yyyy-mm-dd) as the date
+                    # use first 10 chars (yyyy-mm-dd) as the date
                     date_str = file[:10]
                     try:
                         date_obj = datetime.datetime.strptime(date_str, "%Y-%m-%d")
@@ -65,11 +65,12 @@ class snippetdataset(Dataset):
         file_path = self.files[idx]
         label = self.labels[idx]
         try:
-            # files are already at target_sr; use sr=None
-            y, _ = librosa.load(file_path, sr=None)
+            # force mono and limit to 15s
+            y, _ = librosa.load(file_path, sr=None, mono=True)
+            y = y[: self.target_sr * 15]
         except Exception as e:
             print(f"error loading {file_path}: {e}")
-            y = np.zeros(int(self.target_sr * 15))  # 15s of silence on failure
+            y = np.zeros(int(self.target_sr * 15))
         return {
             "audio": y,
             "label": torch.tensor(label, dtype=torch.float),
@@ -78,9 +79,17 @@ class snippetdataset(Dataset):
 
 
 def collate_fn(batch):
-    audios = [torch.tensor(item["audio"]) for item in batch]
+    desired_length = 360000  # 15s * 24000 Hz
+    padded_audios = []
+    for item in batch:
+        audio = torch.tensor(item["audio"])
+        if audio.size(0) < desired_length:
+            audio = torch.nn.functional.pad(audio, (0, desired_length - audio.size(0)))
+        else:
+            audio = audio[:desired_length]
+        padded_audios.append(audio)
+    audios = torch.stack(padded_audios)
     labels = torch.stack([item["label"] for item in batch])
-    audios = torch.stack(audios)
     return {"audio": audios, "label": labels}
 
 
@@ -95,11 +104,12 @@ class regressionhead(nn.Module):
 
 
 def main():
-    writer = SummaryWriter(log_dir="logs")
+    log_dir = os.path.join("logs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    writer = SummaryWriter(log_dir=log_dir)
     global_step = 0
     start_epoch = 0
 
-    # prepare dataset and data loaders
+    # prepare dataset and dataloaders
     full_dataset = snippetdataset(input_dir, base_date, target_sr=target_sr)
     dataset_size = len(full_dataset)
     val_size = int(valid_split * dataset_size)
@@ -113,18 +123,32 @@ def main():
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,  # try lowering or even 0 if needed
+        num_workers=num_workers,
         collate_fn=collate_fn,
-        # removed persistent_workers & multiprocessing_context
     )
-    val_loader = DataLoader(
+    full_val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
         collate_fn=collate_fn,
-        # removed persistent_workers & multiprocessing_context
     )
+
+    # compute mini validation set size proportionally:
+    epoch_iterations = len(train_loader)  # number of batches per epoch
+    mini_val_fraction = checkpoint_freq / epoch_iterations
+    mini_val_size = max(1, int(mini_val_fraction * len(val_dataset)))
+    mini_val_dataset, _ = random_split(
+        val_dataset, [mini_val_size, len(val_dataset) - mini_val_size]
+    )
+    mini_val_loader = DataLoader(
+        mini_val_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+    )
+    print(f"mini validation set size: {len(mini_val_dataset)}")
 
     # load processor and base model
     processor = Wav2Vec2FeatureExtractor.from_pretrained(
@@ -146,14 +170,16 @@ def main():
     base_model.to(device)
     reg_head.to(device)
 
-    # full model training: no freezing
+    # set up optimizer, scheduler, and criterion
     optimizer = optim.AdamW(
         list(base_model.parameters()) + list(reg_head.parameters()),
         lr=initial_lr,
         weight_decay=0.01,
     )
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=500, num_training_steps=scheduler_total_steps
+        optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=total_training_steps,
     )
     criterion = nn.MSELoss()
 
@@ -169,7 +195,7 @@ def main():
                 "mixed precision autocast not supported on mps; proceeding in fp32.", e
             )
 
-    # resume from checkpoint if available
+    # resume checkpoint if available
     if resume_checkpoint and os.path.exists(resume_checkpoint):
         ckpt = torch.load(resume_checkpoint, map_location=device)
         base_model.load_state_dict(ckpt["base_model_state_dict"])
@@ -187,7 +213,7 @@ def main():
         print(f"starting epoch {epoch+1}")
         epoch_loss = 0.0
         batch_count = 0
-        # iterate through train loader
+
         for batch in tqdm(train_loader, desc=f"epoch {epoch+1} training"):
             batch_count += 1
             global_step += 1
@@ -232,15 +258,13 @@ def main():
                 "learning_rate", optimizer.param_groups[0]["lr"], global_step
             )
 
-            # frequent checkpointing & validation
             if global_step % checkpoint_freq == 0:
-                # validation
                 base_model.eval()
                 reg_head.eval()
                 total_val_loss = 0.0
                 val_batches = 0
                 with torch.no_grad():
-                    for batch_val in val_loader:
+                    for batch_val in mini_val_loader:
                         inputs_val = processor(
                             batch_val["audio"].tolist(),
                             sampling_rate=target_sr,
@@ -274,13 +298,12 @@ def main():
                         val_batches += 1
                 avg_val_loss = total_val_loss / val_batches if val_batches > 0 else 0.0
                 print(
-                    f"\nvalidation at step {global_step}: avg loss = {avg_val_loss:.4f}"
+                    f"\ncheckpoint validation at step {global_step}: avg loss = {avg_val_loss:.4f}"
                 )
                 writer.add_scalar("val_loss", avg_val_loss, global_step)
                 base_model.train()
                 reg_head.train()
 
-                # save checkpoint
                 ckpt_data = {
                     "epoch": epoch,
                     "global_step": global_step,
@@ -299,7 +322,6 @@ def main():
         writer.add_scalar("epoch/train_loss", avg_epoch_loss, epoch + 1)
         epoch += 1
 
-    # never reached (unless training is stopped externally)
     writer.close()
 
 
