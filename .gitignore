@@ -6,3 +6,4 @@
 *.pt
 *.wav
 /script/train/logs/
+*logs*
