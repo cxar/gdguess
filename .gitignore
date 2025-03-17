@@ -7,3 +7,22 @@
 *.wav
 /script/train/logs/
 *logs*
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Temporary files
+tmp_extract/

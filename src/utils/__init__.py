@@ -2,8 +2,8 @@
 Utility functions for the Grateful Dead show dating project.
 """
 
-from utils.helpers import debug_shape, reset_parameters
-from utils.visualization import (
+from .helpers import debug_shape, reset_parameters
+from .visualization import (
     log_era_confusion_matrix,
     log_error_by_era,
     log_prediction_samples,

@@ -1,6 +1,0 @@
-torch>=2.6.0
-transformers>=4.28.0
-librosa>=0.10.0
-tqdm>=4.64.0
-numpy>=1.21.0
-nnAudio>=0.1.6

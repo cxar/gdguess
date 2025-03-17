@@ -1,0 +1,53 @@
+# Model Configuration
+
+# Audio processing
+audio:
+  sample_rate: 24000
+  n_fft: 2048
+  hop_length: 512
+  n_mels: 128
+  f_min: 20
+  f_max: 8000
+  
+# Model architecture
+model:
+  feature_dim: 64
+  hidden_dim: 256
+  num_heads: 4
+  dropout: 0.1
+  num_seasonal_components: 4
+  
+# Training
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  num_epochs: 100
+  early_stopping_patience: 10
+  
+# Data
+data:
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  max_audio_length: 30  # seconds
+  min_audio_length: 5   # seconds
+  
+# Logging
+logging:
+  log_dir: "logs"
+  tensorboard: true
+  checkpoint_frequency: 5  # epochs
+  
+# Paths
+paths:
+  data_dir: "data/raw"
+  processed_dir: "data/processed"
+  model_dir: "models"
+  
+# Features
+features:
+  use_harmonic_percussive: true
+  use_chroma: true
+  use_spectral_contrast: true
+  use_onset_envelope: true 
