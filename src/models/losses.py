@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from typing import Dict, Optional
 
 
 class UncertaintyLoss(nn.Module):
@@ -83,33 +84,35 @@ class DynamicTaskLoss(nn.Module):
     "Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics"
     by Kendall et al., 2018.
     """
-    def __init__(self):
+    def __init__(self, num_tasks: int = 3):
         super().__init__()
         # Initialize log task weights (one per task)
-        self.log_vars = nn.Parameter(torch.zeros(3))  # [regression, era, year]
+        self.log_vars = nn.Parameter(torch.zeros(num_tasks))
 
-    def forward(self, regression_loss: torch.Tensor, era_loss: torch.Tensor, 
-                year_loss: torch.Tensor) -> torch.Tensor:
+    def forward(self, losses: list) -> torch.Tensor:
         """
         Compute weighted multi-task loss with learned weights.
         
         Args:
-            regression_loss: Date regression loss
-            era_loss: Era classification loss
-            year_loss: Year classification loss
+            losses: List of individual task losses
             
         Returns:
             Combined loss with learned weights
         """
+        # Ensure we have the right number of tasks
+        assert len(losses) == len(self.log_vars), f"Expected {len(self.log_vars)} losses, got {len(losses)}"
+        
         # Get precision terms
         precision = torch.exp(-self.log_vars)
         
         # Weight individual losses
-        weighted_regression = precision[0] * regression_loss + 0.5 * self.log_vars[0]
-        weighted_era = precision[1] * era_loss + 0.5 * self.log_vars[1]
-        weighted_year = precision[2] * year_loss + 0.5 * self.log_vars[2]
+        weighted_losses = [
+            precision[i] * loss + 0.5 * self.log_vars[i] 
+            for i, loss in enumerate(losses)
+        ]
         
-        return weighted_regression + weighted_era + weighted_year
+        # Sum up all weighted losses
+        return sum(weighted_losses)
 
 
 class CombinedDeadLoss(nn.Module):
@@ -121,10 +124,14 @@ class CombinedDeadLoss(nn.Module):
         super().__init__()
         self.uncertainty_loss = UncertaintyLoss()
         self.periodicity_loss = PeriodicityLoss(period_days)
-        self.dynamic_weighting = DynamicTaskLoss()
+        self.dynamic_weighting = DynamicTaskLoss(num_tasks=3)  # regression, era, year
         self.ce_loss = nn.CrossEntropyLoss()
+        self.periodicity_weight = 0.1
 
-    def forward(self, predictions: dict, targets: dict) -> dict:
+    def forward(self, predictions: Dict[str, torch.Tensor], 
+                targets: Dict[str, torch.Tensor], 
+                global_step: Optional[int] = None,
+                total_steps: Optional[int] = None) -> Dict[str, torch.Tensor]:
         """
         Compute combined loss with all components.
         
@@ -138,39 +145,70 @@ class CombinedDeadLoss(nn.Module):
                 - days: True days since base date
                 - era: True era labels
                 - year: True year labels
+            global_step: Current training step (optional)
+            total_steps: Total training steps (optional)
                 
         Returns:
             Dict containing total loss and individual components
         """
-        # Compute individual losses
-        regression_loss = self.uncertainty_loss(
-            predictions['days'],
-            targets['days'],
-            predictions['log_variance']
-        )
+        # Handle missing keys with graceful fallbacks
+        pred_days = predictions.get('days')
+        if pred_days is None:
+            raise ValueError("Predictions must contain 'days' key")
+            
+        true_days = targets.get('days')
+        if true_days is None:
+            raise ValueError("Targets must contain 'days' key")
         
-        periodicity_loss = self.periodicity_loss(
-            predictions['days'],
-            targets['days']
-        )
+        # Make sure tensors match in dimension
+        if pred_days.dim() == 2 and true_days.dim() == 1:
+            true_days = true_days.unsqueeze(1)
+        elif pred_days.dim() == 1 and true_days.dim() == 2:
+            pred_days = pred_days.unsqueeze(1)
         
-        era_loss = self.ce_loss(predictions['era_logits'], targets['era'])
-        year_loss = self.ce_loss(predictions['year_logits'], targets['year'])
+        # Compute regression loss with uncertainty
+        log_variance = predictions.get('log_variance')
+        if log_variance is not None:
+            regression_loss = self.uncertainty_loss(pred_days, true_days, log_variance)
+        else:
+            # Fallback to Huber loss if no uncertainty provided
+            regression_loss = F.huber_loss(pred_days, true_days, delta=5.0)
+            
+        # Compute periodicity loss
+        periodicity_loss = self.periodicity_loss(pred_days, true_days)
         
-        # Combine regression and periodicity losses
-        total_regression = regression_loss + 0.1 * periodicity_loss
-        
-        # Apply dynamic task weighting
-        total_loss = self.dynamic_weighting(
-            total_regression,
-            era_loss,
-            year_loss
-        )
-        
-        return {
-            'loss': total_loss,
+        # Collect individual task losses
+        losses = [regression_loss + self.periodicity_weight * periodicity_loss]
+        individual_losses = {
             'regression_loss': regression_loss,
-            'periodicity_loss': periodicity_loss,
-            'era_loss': era_loss,
-            'year_loss': year_loss
-        } 
+            'periodicity_loss': periodicity_loss
+        }
+        
+        # Compute era loss if provided
+        era_logits = predictions.get('era_logits')
+        true_era = targets.get('era')
+        if era_logits is not None and true_era is not None:
+            era_loss = self.ce_loss(era_logits, true_era)
+            losses.append(era_loss)
+            individual_losses['era_loss'] = era_loss
+        else:
+            individual_losses['era_loss'] = torch.tensor(0.0, device=pred_days.device)
+            
+        # Compute year loss if provided
+        year_logits = predictions.get('year_logits')
+        true_year = targets.get('year')
+        if year_logits is not None and true_year is not None:
+            year_loss = self.ce_loss(year_logits, true_year)
+            losses.append(year_loss)
+            individual_losses['year_loss'] = year_loss
+        else:
+            individual_losses['year_loss'] = torch.tensor(0.0, device=pred_days.device)
+            
+        # Apply dynamic task weighting
+        total_loss = self.dynamic_weighting(losses)
+        
+        # Combine all losses
+        result = {'loss': total_loss}
+        result.update(individual_losses)
+        
+        return result
