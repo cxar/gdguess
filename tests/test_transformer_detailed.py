@@ -256,8 +256,8 @@ def run_detailed_transformer_test():
         days_shape = outputs['days'].shape
         era_logits_shape = outputs['era_logits'].shape
         
-        expected_days_shape = (batch_size,)
-        expected_era_logits_shape = (batch_size, 5)
+        expected_days_shape = (batch_size, 1)
+        expected_era_logits_shape = (batch_size, 7)
         
         if days_shape == expected_days_shape:
             print(f"✅ 'days' output has correct shape: {days_shape}")

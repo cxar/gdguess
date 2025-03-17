@@ -1,28 +1,55 @@
-# Ignore macOS metadata files
-.DS_Store
-
-# Ignore the top-level data directory
-/data/
-*.pt
-*.wav
-/script/train/logs/
-*logs*
-
-# Python cache files
+# Python bytecode and cache
 __pycache__/
 *.py[cod]
 *$py.class
 
 # Distribution / packaging
-*.egg-info/
-*.egg
 dist/
 build/
+*.egg-info/
+*.egg
 
 # Virtual environments
 venv/
 env/
 ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model checkpoints and logs
+checkpoints/
+logs/
+output/
+*.pt
+*.pth
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data files
+/data/
+*.wav
+/script/train/logs/
+*logs*
+
+# Debugging and profiling
+prof/
+*.lprof
+*.prof
+*.trace
 
 # Temporary files
 tmp_extract/

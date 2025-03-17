@@ -43,17 +43,36 @@ The training process uses Stochastic Weight Averaging (SWA) to improve model gen
 
 ## Usage
 
-To train the model:
+The project includes a single integrated command-line interface for all operations:
 
 ```bash
-python -m training.run_training --data-dir /path/to/data --batch-size 16 --steps 10000
+# Training
+./gdguess.py train --data-dir /path/to/data --batch-size 16 --steps 10000
+
+# Inference
+./gdguess.py infer --model /path/to/model --input /path/to/audio
+
+# Inspect model checkpoints
+./gdguess.py inspect /path/to/checkpoint.pt
+
+# Check system information
+./gdguess.py sysinfo --test-device --benchmark
 ```
 
-Optional arguments:
-- `--config`: Path to a config file
-- `--lr`: Initial learning rate
-- `--checkpoint`: Path to checkpoint to resume from
-- `--device`: Device to use (cuda, mps, cpu, auto)
+### Apple Silicon GPU Acceleration
+
+The model supports training and inference on Apple Silicon GPUs using Metal Performance Shaders (MPS).
+
+Requirements:
+- Apple Silicon Mac (M1/M2/M3 series)
+- macOS 12.3+ (Monterey or newer)
+- PyTorch 1.13+ (PyTorch 2.0+ recommended)
+
+To use Apple Silicon GPU acceleration, use the `--device mps` flag:
+
+```bash
+./gdguess.py train --device mps --data-dir /path/to/data
+```
 
 ## Recent Improvements
 
@@ -62,3 +81,6 @@ Optional arguments:
 - Created a Trainer class to encapsulate the training loop
 - Improved error handling and validation
 - Enhanced memory management, especially for MPS (Apple Silicon) devices
+- Consolidated utility scripts into a more coherent structure
+- Added comprehensive inspection tools for PyTorch checkpoints
+- Created a unified command-line interface for all operations

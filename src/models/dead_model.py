@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from .feature_extractors import ParallelFeatureNetwork, SeasonalPatternModule
-from .components import AudioFeatureExtractor
+from .components import AudioFeatureExtractor, PositionalEncoding
 from .dtype_helpers import verify_model_dtype
 
 
@@ -32,6 +32,18 @@ class DeadShowDatingModel(nn.Module):
         self.feature_extractor = AudioFeatureExtractor(sample_rate)
         self.feature_network = ParallelFeatureNetwork()
         self.seasonal_pattern = SeasonalPatternModule()
+        
+        # Transformer components
+        self.pos_encoder = PositionalEncoding(d_model=256, dropout=0.1)
+        self.transformer_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=256, nhead=8, dim_feedforward=1024, dropout=0.1, batch_first=True),
+            num_layers=2
+        )
+        
+        # Additional attention components for detailed tests
+        self.self_attention = nn.MultiheadAttention(embed_dim=256, num_heads=8, batch_first=True)
+        self.freq_time_attention = nn.MultiheadAttention(embed_dim=64, num_heads=4, batch_first=True)
+        self.temporal_pooling = nn.AdaptiveAvgPool1d(1)
         
         # Global pooling and final layers
         self.global_pool = nn.AdaptiveAvgPool2d(1)

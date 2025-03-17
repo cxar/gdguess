@@ -12,7 +12,8 @@ import numpy as np
 # Add the parent directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.models.dead_model import DeadShowDatingModel, PositionalEncoding
+from src.models.dead_model import DeadShowDatingModel
+from src.models.components import PositionalEncoding
 
 def test_transformer_encoder():
     """Test the Transformer encoder component directly."""
