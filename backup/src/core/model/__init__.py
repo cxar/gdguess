@@ -1,0 +1,1 @@
+"""Model architecture for the Grateful Dead show dating project."""
